@@ -3,35 +3,25 @@
 
 
 import logging
-
 logger = logging.getLogger(__name__)
-
 import pyuvm
-
 from cocotb.types import LogicArray
-
 from cocotb.clock import Clock
-
 from cocotb.triggers import RisingEdge, Timer, FallingEdge, ReadOnly
-
 from pyuvm import *
 from tabulate import tabulate
-
 from cocotb.utils import get_sim_time
 from fifo_model_simple_version import FIFOModel
-
 
 import sys
 print("Python executable:", sys.executable)
 print("Python path:", sys.path)
 
-
 # Not sure to understand this command
 logging.getLogger("pyuvm").setLevel(logging.DEBUG)
 
-
 # Set the logging level (optional, default is WARNING)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 # Create a file handler to write logs to a file
 file_handler = logging.FileHandler('log_fifo_file.txt')
@@ -57,10 +47,6 @@ class FifoCoverage(uvm_subscriber):
             "empty_1": 0
 
         }
-
-    def connect_phase(self):
-        pass
-
     def write(self, coverage_signals):
         if coverage_signals["wr_en"]:
             self.coverage["write"] += 1
@@ -75,14 +61,11 @@ class FifoCoverage(uvm_subscriber):
         else :
             print(f"The value of not empty is : {type(coverage_signals['empty'])} {coverage_signals['empty']}")
 
-
     def report_phase(self):
         print("Functional Coverage Report:")
         for key, value in self.coverage.items():
             print(f"{key}: {value}")
 
-
-# Let discuss __eq__ method and the connect port not sure what they do
 class FifoSequenceItem(uvm_sequence_item):
     def __init__(self, name, index, rd_en = 0, wr_en = 0, reset_n = 1) -> None:
         super().__init__(name)
@@ -96,10 +79,6 @@ class FifoSequenceItem(uvm_sequence_item):
         return f'{self.get_name()} {self.index}:{self.write_data}'
 
 
-
-# # Try to Understand what are those B value there for
-# # But I also do not see the write read enable etc ...
-# Why do I have nothing on the read_en on the if condition
 class FifoDriver(uvm_driver):
     def __init__(self, name = 'fifo', parent=None):
         super().__init__(name, parent)
@@ -118,7 +97,7 @@ class FifoDriver(uvm_driver):
                             (1 - ConfigDB().get(self, "", "CLOCK_SETUP"))))
         while not self.stop_requested:
             seq_item = await self.seq_item_port.get_next_item()
-            logger.info(f"Driver received Item {seq_item}")
+            logger.debug(f"FifoDriver received Item {seq_item}")
 
             await RisingEdge(self.dut.clk) # Settings the signals to respect the set up and hold of the Flip Flop
             await Timer(clock_setup_time, unit='ns')
@@ -140,11 +119,6 @@ class FifoDriver(uvm_driver):
 
         self.stop_requested = True
 
-
-# # FIFO Monitor
-# Why do we need a raise and drop objection with the Monitor just for monitoring?
-# I have remove it and it still works
-
 class FifoMonitor(uvm_monitor):
     def __init__(self, name = 'fifo', parent=None, dut=None, cycles_to_monitor=100):
         super().__init__(name, parent)
@@ -152,22 +126,20 @@ class FifoMonitor(uvm_monitor):
         self.cycles_to_monitor = cycles_to_monitor
         self.ap = uvm_analysis_port("ap", self)
 
-    def build_phase(self):
-        pass
 
     async def run_phase(self):
-
         self.raise_objection()
         for i in range(self.cycles_to_monitor):
             signals_monitored = dict()
             await RisingEdge(self.dut.clk)
             signals_monitored["rd_ptr"] = self.dut.rd_ptr.value
+
             await ReadOnly()   # After the simulated signals have settled for this time steps
 
             signals_monitored["sim_time_ns"] = get_sim_time(unit="ns")
-
             signals_monitored["reset_n"] = self.dut.reset_n.value
             signals_monitored["rd_en"] = self.dut.rd_en.value
+            signals_monitored["wr_ptr"] = self.dut.wr_ptr.value
             signals_monitored["wr_en"] = self.dut.wr_en.value
             signals_monitored["data_out"] = self.dut.data_out.value
             signals_monitored["full"] = self.dut.full.value
@@ -177,7 +149,6 @@ class FifoMonitor(uvm_monitor):
             signals_monitored["flag_full_empty"] = self.dut.flag_full_empty.value
 
             self.ap.write(signals_monitored)  # Send observed data to the connected scoreboard
-
         self.drop_objection()
 
 #
@@ -192,11 +163,11 @@ class FifoScoreboard(uvm_scoreboard):
         self.result_export = self.result_fifo.analysis_export # connected to the Monitor
         self.fifo_model = None
 
-
-    def add_result(self, expected, observed, description="", mem_address_read=0, sim_time_ns=0):
+    def add_result(self, expected, observed, description="", mem_address_read=0, mem_addr_write=0 , sim_time_ns=0):
         match = "PASS" if expected == observed else "FAIL"
         self.result_table.append({
             "Memory_Address": mem_address_read,
+            "Memory_Address_Write": mem_addr_write,
             "Description": description,
             "Expected": f"{expected}",
             "Observed": f"{observed}",
@@ -206,22 +177,20 @@ class FifoScoreboard(uvm_scoreboard):
 
 
     def display_results(self):
-
         table_data = [
-            [result["Description"], result["Memory_Address"], result["Expected"], result["Observed"], result["Match"], result["sim_time_ns"]]
+            [result["Description"], result["Memory_Address"], result["Memory_Address_Write"], result["Expected"], result["Observed"], result["Match"], result["sim_time_ns"]]
             for result in self.result_table
         ]
         # Define table headers
-        headers = ["Description", "Memory_Address", "Expected", "Observed", "Match", "sim_time_ns"]
+        headers = ["Description", "Memory_Address", "Memory_Address_write", "Expected", "Observed", "Match", "sim_time_ns"]
         # Generate table
         table = tabulate(table_data, headers=headers, tablefmt="grid")
         print(table)
 
-
     def build_phase(self):
         depth = ConfigDB().get(self, "", "FIFO_DEPTH")
         self.fifo_model = FIFOModel(depth=depth)
-        logger.info(f"Scoreboard reference model created with depth={depth}")
+        logger.debug(f"Scoreboard reference model created with depth={depth}")
 
     def connect_phase(self):
         self.result_get_port.connect(self.result_fifo.get_export)
@@ -230,7 +199,7 @@ class FifoScoreboard(uvm_scoreboard):
         expected = None
         while self.result_get_port.can_get():
             _, monitor_data = self.result_get_port.try_get()
-            print(f" XXXX In the ScoreBoard Checking monitor_data: {monitor_data}")
+            logger.debug(f" FifoScoreboard Monitor Data: {monitor_data}")
 
             if monitor_data["reset_n"] == 0:
                 self.fifo_model.reset()
@@ -245,14 +214,14 @@ class FifoScoreboard(uvm_scoreboard):
             if expected is not None:
                 observed = monitor_data["data_out"]
                 sim_time_ns = monitor_data["sim_time_ns"]
-                logger.info(f"data_out: {monitor_data['data_out']}")
+                logger.debug(f"data_out: {monitor_data['data_out']}")
                 match = observed == expected
-                self.add_result(expected, observed, description= "Monitor", mem_address_read=monitor_data["rd_ptr"], sim_time_ns=sim_time_ns)
+                self.add_result(expected, observed, description= "Monitor", mem_addr_write=monitor_data["wr_ptr"], mem_address_read=monitor_data["rd_ptr"], sim_time_ns=sim_time_ns)
                 if not match:
                     self.display_results()
                     pyuvm.uvm_error(self.name, f"Mismatch: Expected {expected}, Observed {observed}")
                 else:
-                    logger.info(f" Actual_result {observed} =  Expected {expected}")
+                    logger.debug(f" FifoScoreboard Actual_result {observed} =  Expected {expected}")
         self.display_results()
 
 #
@@ -280,9 +249,6 @@ class FifoSequence(uvm_sequence):
             await self.send_data_sequence("do_nothing", rd_en=0, wr_en=0)
 #################################################
 
-        print(f" I AM INSIDE THE FIFO SEQUENCE flag_full_empty.value {cocotb.top.flag_full_empty.value}")
-        print(f" I AM INSIDE THE FIFO SEQUENCE FIFO_DEPTH.value {cocotb.top.DEPTH.value}")
-        print(f" I AM INSIDE THE FIFO SEQUENCE using self.DEPTH {self.DEPTH}")
 
 # Test 3 Filling the Fifo with data
 # Write N items where N is the FIFO DEPTH. Fill the Fifo with Data
@@ -313,12 +279,10 @@ class FifoSequence(uvm_sequence):
         for i in range(self.PAUSE_LENGTH):
             await self.send_data_sequence("do_nothing", rd_en=0, wr_en=0)
 
-
 # Read N items where N is the FIFO DEPTH. Read the Entire Fifo
 ###############################################
         for i in range(self.DEPTH):
             await self.send_data_sequence("read_1", rd_en=1, wr_en=0)
-
 
 # Wait 3 Clock Cycle After Read
 ###############################################
@@ -341,14 +305,9 @@ class FifoSequence(uvm_sequence):
             seq_item = FifoSequenceItem("reset_after_write", 0, reset_n=0)
             await self.start_item(seq_item)
             await self.finish_item(seq_item)
-        #
-        # for i in range(int(self.DEPTH/2)):
-        #     await self.send_data_sequence("reading_after_reset", rd_en=1, wr_en=0)
-
 
         await self.send_data_sequence("Extra_write", rd_en=0, wr_en=1)
         await self.send_data_sequence("Extra_read", rd_en=1, wr_en=0)
-
 ###############################################################################################
 
     async def send_data_sequence(self, name, rd_en = 0, wr_en = 0):
@@ -358,19 +317,14 @@ class FifoSequence(uvm_sequence):
         #     seq_item.randomize()  # Just added by Dr Eric
         await self.finish_item(seq_item)
         self.index += 1
-
-
-
 ################
 
-#
 class FifoSequencer(uvm_sequencer):
      pass
 
 class FifoEnv(uvm_env):
 
     def build_phase(self):
-
         self.dut = cocotb.top
         self.monitor = FifoMonitor.create("cmd_mon", self)
         self.monitor.dut = self.dut
@@ -378,7 +332,6 @@ class FifoEnv(uvm_env):
         ConfigDB().set(None, "*", "SEQR", self.seqr)
         # Added by Christian
         ConfigDB().set(None, "*", "FIFO_DEPTH", int(self.dut.DEPTH.value))
-
         self.driver = FifoDriver.create("driver", self)
         self.driver.dut = self.dut
         self.coverage = FifoCoverage("coverage", self)
@@ -388,7 +341,6 @@ class FifoEnv(uvm_env):
         self.driver.seq_item_port.connect(self.seqr.seq_item_export)
         self.monitor.ap.connect(self.scoreboard.result_export)
         self.monitor.ap.connect(self.coverage.analysis_export)
-
 
     async def run_phase(self):
         for i in range(100):
@@ -422,6 +374,5 @@ class FifoTest(uvm_test):
             cocotb.start_soon(clock.start())
 
         await self.sequence.start(self.env.seqr)
-
         self.drop_objection()
 

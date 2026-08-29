@@ -13,18 +13,19 @@ class FIFOModel:
         if not self.is_full():
             self.buffer.append(data)
         else:
-            print("FIFO full – write ignored")
+           # print("FIFO full – write ignored")
+           pass
 
     def read(self):
         if not self.is_empty():
             return self.buffer.pop(0)
         else:
-            print("FIFO empty – read ignored")
+          #  print("FIFO empty – read ignored")
             return None
 
     def reset(self):
         self.buffer.clear()
-        print("FIFO reset")
+        #print("FIFO reset")
 
 
 if __name__ == "__main__":
