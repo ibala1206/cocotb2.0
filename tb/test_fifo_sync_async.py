@@ -2,6 +2,7 @@
 #from nacl.utils import random
 
 
+import bisect
 import logging
 logger = logging.getLogger(__name__)
 import pyuvm
@@ -105,14 +106,12 @@ class FifoDriver(uvm_driver):
             self.dut.wr_en.value = seq_item.wr_en
             self.dut.reset_n.value = seq_item.reset_n
             self.dut.rd_en.value = seq_item.rd_en
-
-            if (seq_item.wr_en and not self.dut.full.value) or seq_item.reset_n == 0:
-                # Added to enable the table results
-                signals_driven = dict()
-                signals_driven["data_in"] = LogicArray.from_unsigned(seq_item.write_data,len(self.dut.data_in))
-                signals_driven["seq_name"] = seq_item.get_name()
-                signals_driven["reset_n"] = seq_item.reset_n
-                self.ap.write(signals_driven)  # Not used currently
+            signals_driven = dict()
+            signals_driven["data_in"] = LogicArray.from_unsigned(seq_item.write_data,len(self.dut.data_in))
+            signals_driven["sim_time_ns"] = get_sim_time(unit="ns")
+            signals_driven["seq_name"] = seq_item.get_name()
+            signals_driven["reset_n"] = seq_item.reset_n
+            self.ap.write(signals_driven)  # Not used currently
 
             self.seq_item_port.item_done()
     def stop(self):
@@ -158,12 +157,18 @@ class FifoScoreboard(uvm_scoreboard):
         self.dut = dut
         self.name = name
         self.result_table = []
+        self.driver_info  = []
         self.result_fifo = uvm_tlm_analysis_fifo("result_fifo", self)
         self.result_get_port = uvm_get_port("result_get_port", self)
         self.result_export = self.result_fifo.analysis_export # connected to the Monitor
+
+        self.driver_fifo = uvm_tlm_analysis_fifo("driver_fifo", self)
+        self.driver_get_port = uvm_get_port("driver_get_port", self)
+        self.driver_export = self.driver_fifo.analysis_export # connected to the Driver
+
         self.fifo_model = None
 
-    def add_result(self, expected, observed, description="", mem_address_read=0, mem_addr_write=0 , sim_time_ns=0):
+    def add_result(self, expected, observed, description="", mem_address_read=0, mem_addr_write=0 , sim_time_ns=0, seq_name=""):
         match = "PASS" if expected == observed else "FAIL"
         self.result_table.append({
             "Memory_Address": mem_address_read,
@@ -172,17 +177,32 @@ class FifoScoreboard(uvm_scoreboard):
             "Expected": f"{expected}",
             "Observed": f"{observed}",
             "Match": match ,
-            "sim_time_ns": sim_time_ns
+            "sim_time_ns": sim_time_ns,
+            "seq_name": seq_name
         })
 
+    def driver_entry_at(self, result_sim_time):
+        # driver_info is appended in simulation-time order, so it is already
+        # sorted by "sim_time_ns" and can be searched with a bisect.
+        # Returns the entry with the largest sim_time_ns <= result_sim_time,
+        # or None when the result predates every driven item.
+        index = bisect.bisect_right(self.driver_info, result_sim_time,
+                                    key=lambda entry: entry["sim_time_ns"])
+        if index == 0:
+            return None
+        return self.driver_info[index - 1]
+
+    def seq_name_at(self, result_sim_time):
+        driver_entry = self.driver_entry_at(result_sim_time)
+        return "" if driver_entry is None else driver_entry["seq_name"]
 
     def display_results(self):
         table_data = [
-            [result["Description"], result["Memory_Address"], result["Memory_Address_Write"], result["Expected"], result["Observed"], result["Match"], result["sim_time_ns"]]
+            [result["Description"], result["seq_name"], result["Memory_Address"], result["Memory_Address_Write"], result["Expected"], result["Observed"], result["Match"], result["sim_time_ns"]]
             for result in self.result_table
         ]
         # Define table headers
-        headers = ["Description", "Memory_Address", "Memory_Address_write", "Expected", "Observed", "Match", "sim_time_ns"]
+        headers = ["Description", "seq_name", "Memory_Address", "Memory_Address_write", "Expected", "Observed", "Match", "sim_time_ns"]
         # Generate table
         table = tabulate(table_data, headers=headers, tablefmt="grid")
         print(table)
@@ -194,8 +214,14 @@ class FifoScoreboard(uvm_scoreboard):
 
     def connect_phase(self):
         self.result_get_port.connect(self.result_fifo.get_export)
+        self.driver_get_port.connect(self.driver_fifo.get_export)
 
     def check_phase(self):
+        while self.driver_get_port.can_get():
+            _, driver_data = self.driver_get_port.try_get()
+            logger.info(f" FifoScoreboard Driver Data: {driver_data}")
+            self.driver_info.append(driver_data)
+
         expected = None
         while self.result_get_port.can_get():
             _, monitor_data = self.result_get_port.try_get()
@@ -214,12 +240,14 @@ class FifoScoreboard(uvm_scoreboard):
             if expected is not None:
                 observed = monitor_data["data_out"]
                 sim_time_ns = monitor_data["sim_time_ns"]
+                seq_name = self.seq_name_at(sim_time_ns)
+
                 logger.debug(f"data_out: {monitor_data['data_out']}")
                 match = observed == expected
-                self.add_result(expected, observed, description= "Monitor", mem_addr_write=monitor_data["wr_ptr"], mem_address_read=monitor_data["rd_ptr"], sim_time_ns=sim_time_ns)
+                self.add_result(expected, observed, description= seq_name, mem_addr_write=monitor_data["wr_ptr"], mem_address_read=monitor_data["rd_ptr"], sim_time_ns=sim_time_ns, seq_name=seq_name)
                 if not match:
                     self.display_results()
-                    pyuvm.uvm_error(self.name, f"Mismatch: Expected {expected}, Observed {observed}")
+                    pyuvm.uvm_error(self.name, f"Mismatch at {sim_time_ns} ns (seq_name={seq_name}): Expected {expected}, Observed {observed}")
                 else:
                     logger.debug(f" FifoScoreboard Actual_result {observed} =  Expected {expected}")
         self.display_results()
@@ -338,7 +366,8 @@ class FifoEnv(uvm_env):
         self.scoreboard = FifoScoreboard("scoreboard", self, self.dut)
 #
     def connect_phase(self):
-        self.driver.seq_item_port.connect(self.seqr.seq_item_export)
+        self.driver.seq_item_port.connect(self.seqr.seq_item_export)  # Connect the driver to the sequence Item
+        self.driver.ap.connect(self.scoreboard.driver_export)
         self.monitor.ap.connect(self.scoreboard.result_export)
         self.monitor.ap.connect(self.coverage.analysis_export)
 
