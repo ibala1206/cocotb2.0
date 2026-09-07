@@ -182,10 +182,7 @@ class FifoScoreboard(uvm_scoreboard):
         })
 
     def driver_entry_at(self, result_sim_time):
-        # driver_info is appended in simulation-time order, so it is already
-        # sorted by "sim_time_ns" and can be searched with a bisect.
-        # Returns the entry with the largest sim_time_ns <= result_sim_time,
-        # or None when the result predates every driven item.
+
         index = bisect.bisect_right(self.driver_info, result_sim_time,
                                     key=lambda entry: entry["sim_time_ns"])
         if index == 0:
@@ -290,19 +287,13 @@ class FifoSequence(uvm_sequence):
         for i in range(self.PAUSE_LENGTH):
             await self.send_data_sequence("do_nothing", rd_en=0, wr_en=0)
 
-# # added to be able to stop the code at anytime to add multiple check
-#         await self.send_data_sequence("stop")
 
-# Test extra write in the Fifo when Fifo is full to make sure that we cannot write anymore
 ###########################################################
         for i in range(int(self.DEPTH)//2):
             await self.send_data_sequence(f"writing_{i} x", rd_en=0, wr_en=1)
 
 ###############################################################
-#        cocotb.stop()
- #       uvm_stop()
- #       uvm_test_done()
-# Wait 3 Clock Cycle before Reading the Entire Fifo
+
 ###############################################
         for i in range(self.PAUSE_LENGTH):
             await self.send_data_sequence("do_nothing", rd_en=0, wr_en=0)
