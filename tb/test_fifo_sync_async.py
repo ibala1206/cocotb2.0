@@ -1,6 +1,4 @@
 #import random
-#from nacl.utils import random
-
 
 import bisect
 import logging
@@ -15,8 +13,7 @@ from cocotb.utils import get_sim_time
 from fifo_model_simple_version import FIFOModel
 
 import sys
-print("Python executable:", sys.executable)
-print("Python path:", sys.path)
+
 
 # Not sure to understand this command
 logging.getLogger("pyuvm").setLevel(logging.DEBUG)
@@ -35,6 +32,12 @@ file_handler.setFormatter(formatter)
 
 # Add the file handler to PyUVM's logger
 logger.addHandler(file_handler)
+
+
+logger.debug(f"Python executable:={sys.executable}")
+
+logger.debug(f"Python path::={sys.path}")
+
 
 # Let discuss this and the connect port not sure what they do
 class FifoCoverage(uvm_subscriber):
@@ -60,7 +63,7 @@ class FifoCoverage(uvm_subscriber):
         elif str(coverage_signals["empty"]) == "1":
             self.coverage["empty_1"] += 1
         else :
-            print(f"The value of not empty is : {type(coverage_signals['empty'])} {coverage_signals['empty']}")
+            logger.warning(f"The value of not empty is : {type(coverage_signals['empty'])} {coverage_signals['empty']}")
 
     def report_phase(self):
         print("Functional Coverage Report:")
@@ -84,7 +87,6 @@ class FifoDriver(uvm_driver):
     def __init__(self, name = 'fifo', parent=None):
         super().__init__(name, parent)
         self.dut = None
-        self.command = None
         self.stop_requested = False
         self.ap = None
 
@@ -111,7 +113,7 @@ class FifoDriver(uvm_driver):
             signals_driven["sim_time_ns"] = get_sim_time(unit="ns")
             signals_driven["seq_name"] = seq_item.get_name()
             signals_driven["reset_n"] = seq_item.reset_n
-            self.ap.write(signals_driven)  # Not used currently
+            self.ap.write(signals_driven)
 
             self.seq_item_port.item_done()
     def stop(self):
@@ -168,12 +170,11 @@ class FifoScoreboard(uvm_scoreboard):
 
         self.fifo_model = None
 
-    def add_result(self, expected, observed, description="", mem_address_read=0, mem_addr_write=0 , sim_time_ns=0, seq_name=""):
+    def add_result(self, expected, observed,  mem_address_read=0, mem_addr_write=0 , sim_time_ns=0, seq_name=""):
         match = "PASS" if expected == observed else "FAIL"
         self.result_table.append({
             "Memory_Address": mem_address_read,
             "Memory_Address_Write": mem_addr_write,
-            "Description": description,
             "Expected": f"{expected}",
             "Observed": f"{observed}",
             "Match": match ,
@@ -195,11 +196,11 @@ class FifoScoreboard(uvm_scoreboard):
 
     def display_results(self):
         table_data = [
-            [result["Description"], result["seq_name"], result["Memory_Address"], result["Memory_Address_Write"], result["Expected"], result["Observed"], result["Match"], result["sim_time_ns"]]
+            [result["seq_name"], result["Memory_Address"], result["Memory_Address_Write"], result["Expected"], result["Observed"], result["Match"], result["sim_time_ns"]]
             for result in self.result_table
         ]
         # Define table headers
-        headers = ["Description", "seq_name", "Memory_Address", "Memory_Address_write", "Expected", "Observed", "Match", "sim_time_ns"]
+        headers = ["seq_name", "Memory_Address", "Memory_Address_write", "Expected", "Observed", "Match", "sim_time_ns"]
         # Generate table
         table = tabulate(table_data, headers=headers, tablefmt="grid")
         print(table)
@@ -241,7 +242,7 @@ class FifoScoreboard(uvm_scoreboard):
 
                 logger.debug(f"data_out: {monitor_data['data_out']}")
                 match = observed == expected
-                self.add_result(expected, observed, description= seq_name, mem_addr_write=monitor_data["wr_ptr"], mem_address_read=monitor_data["rd_ptr"], sim_time_ns=sim_time_ns, seq_name=seq_name)
+                self.add_result(expected, observed, mem_addr_write=monitor_data["wr_ptr"], mem_address_read=monitor_data["rd_ptr"], sim_time_ns=sim_time_ns, seq_name=seq_name)
                 if not match:
                     self.display_results()
                     pyuvm.uvm_error(self.name, f"Mismatch at {sim_time_ns} ns (seq_name={seq_name}): Expected {expected}, Observed {observed}")
