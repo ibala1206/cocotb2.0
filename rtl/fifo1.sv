@@ -48,6 +48,7 @@ module fifo1 #(  parameter DEPTH = 4'b1000 ) // Declare the parameter
         end
     end
 
+
    always @(posedge clk or negedge reset_n) begin
        if (!reset_n) begin
           flag_full_empty <= 1'b0 ;
