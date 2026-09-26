@@ -229,12 +229,14 @@ class FifoScoreboard(uvm_scoreboard):
                 self.fifo_model.reset()
                 expected = 0
             elif monitor_data["wr_en"] == 1 and monitor_data["rd_en"] == 1:
-                expected = self.fifo_model.read()
+                if (model_read := self.fifo_model.read()) is not None:
+                    expected = model_read
                 self.fifo_model.write(monitor_data["data_in"])
             elif monitor_data["wr_en"] == 1 and monitor_data["rd_en"] == 0:
                 self.fifo_model.write(monitor_data["data_in"])
             elif monitor_data["wr_en"] == 0 and monitor_data["rd_en"] == 1:
-                expected = self.fifo_model.read()
+                if (model_read := self.fifo_model.read()) is not None:
+                    expected = model_read
             if expected is not None:
                 observed = monitor_data["data_out"]
                 sim_time_ns = monitor_data["sim_time_ns"]
@@ -329,6 +331,20 @@ class FifoSequence(uvm_sequence):
         await self.send_data_sequence("Extra_write", rd_en=0, wr_en=1)
         await self.send_data_sequence("Extra_read", rd_en=1, wr_en=0)
 ###############################################################################################
+
+# Wait 3 Clock Cycle After Read Check Data out Walrus
+###############################################
+        for i in range(self.PAUSE_LENGTH):
+            await self.send_data_sequence("do_nothing", rd_en=0, wr_en=0)
+
+# Read the Fifo when the Fifo is empty after reading the Full Fifo to check that the Flag stay high
+            ##################################################################
+        for i in range(int(self.DEPTH) // 2):
+            await self.send_data_sequence("read_when_empty", rd_en=1, wr_en=0)
+
+    ####################################################################
+
+
 
     async def send_data_sequence(self, name, rd_en = 0, wr_en = 0):
         seq_item = FifoSequenceItem(name, self.index , wr_en=wr_en, rd_en=rd_en)
